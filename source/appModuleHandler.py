@@ -207,6 +207,15 @@ def reloadAppModules():
 		pid = entry.pop("processID")
 		mod = getAppModuleFromProcessID(pid)
 		mod.__dict__.update(entry)
+	# The appModule property for existing NVDAObjects will now be None, since their AppModule died.
+	# Force focus and navigator objects to re-fetch.
+	for obj in api.getFocusObject(), api.getNavigatorObject():
+		try:
+			del obj._appModuleRef
+		except AttributeError:
+			continue
+		# Fetch and cache right away; the process could die any time.
+		obj.appModule
 
 def initialize():
 	"""Initializes the appModule subsystem. 
