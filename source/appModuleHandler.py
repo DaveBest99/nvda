@@ -178,9 +178,24 @@ def fetchAppModule(processID,appName):
 def reloadAppModules():
 	"""Reloads running appModules.
 	especially, it clears the cache of running appModules and deletes them from sys.modules.
-	Each appModule will be reloaded immediately as a reaction on a first event coming from the process.
+	Each appModule will then be reloaded immediately.
 	"""
 	global appModules
+	state = []
+	for pid, mod in runningTable.iteritems():
+		state.append({"processID": pid,
+			# #2892: We must save nvdaHelperRemote handles, as we can't reinitialize without a foreground/focus event.
+			# Also, if there is an active context handle such as a loaded buffer,
+			# nvdaHelperRemote can't reinit until that handle dies.
+			"helperLocalBindingHandle": mod.helperLocalBindingHandle,
+			"_inprocRegistrationHandle": mod._inprocRegistrationHandle,
+			# #5380: We must save config profile triggers so they can be cleaned up correctly.
+			# Otherwise, they'll remain active forever.
+			# This might not have been set yet, but None means the same thing.
+			"_configProfileTrigger": getattr(mod, "_configProfileTrigger", None),
+		})
+		# #2892: Don't disconnect from nvdaHelperRemote during termination.
+		mod._helperPreventDisconnect = True
 	terminate()
 	del appModules
 	mods=[k for k,v in sys.modules.iteritems() if k.startswith("appModules") and v is not None]
@@ -188,6 +203,10 @@ def reloadAppModules():
 		del sys.modules[mod]
 	import appModules
 	initialize()
+	for entry in state:
+		pid = entry.pop("processID")
+		mod = getAppModuleFromProcessID(pid)
+		mod.__dict__.update(entry)
 
 def initialize():
 	"""Initializes the appModule subsystem. 
@@ -381,6 +400,8 @@ class AppModule(baseObject.ScriptableObject):
 		Subclasses should call the superclass method first.
 		"""
 		winKernel.closeHandle(self.processHandle)
+		if getattr(self, "_helperPreventDisconnect", False):
+			return
 		if self._inprocRegistrationHandle:
 			ctypes.windll.rpcrt4.RpcSsDestroyClientContext(ctypes.byref(self._inprocRegistrationHandle))
 		if self.helperLocalBindingHandle:
